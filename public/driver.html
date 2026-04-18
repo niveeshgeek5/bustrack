@@ -1,0 +1,184 @@
+ 
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Driver Panel</title>
+  <script src="/socket.io/socket.io.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #0f172a;
+      color: white;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      gap: 20px;
+      padding: 20px;
+    }
+    h1 { font-size: 1.8rem; color: #38bdf8; }
+    .card {
+      background: #1e293b;
+      border-radius: 16px;
+      padding: 24px;
+      width: 100%;
+      max-width: 360px;
+      text-align: center;
+    }
+    .dot {
+      width: 14px; height: 14px;
+      border-radius: 50%;
+      background: #ef4444;
+      display: inline-block;
+      margin-right: 8px;
+      vertical-align: middle;
+    }
+    .dot.active { background: #22c55e; animation: pulse 1s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+    .info { margin-top: 12px; font-size: 0.85rem; color: #94a3b8; line-height: 2; }
+    .btn {
+      padding: 16px 32px;
+      border-radius: 12px;
+      border: none;
+      font-size: 1rem;
+      font-weight: bold;
+      cursor: pointer;
+      width: 100%;
+      max-width: 360px;
+      background: #22c55e;
+      color: white;
+      transition: 0.2s;
+    }
+    .btn.stop { background: #ef4444; }
+    .badge {
+      padding: 8px 16px;
+      border-radius: 20px;
+      font-size: 0.8rem;
+      background: #1e293b;
+      color: #94a3b8;
+    }
+    .badge.good { background: #166534; color: #86efac; }
+    .badge.slow { background: #78350f; color: #fcd34d; }
+    .badge.offline { background: #7f1d1d; color: #fca5a5; }
+  </style>
+</head>
+<body>
+
+  <h1>🚌 Driver Panel</h1>
+
+  <div class="card">
+    <div>
+      <span class="dot" id="dot"></span>
+      <span id="statusText">Not sharing</span>
+    </div>
+    <div class="info" id="info">Press Start to begin sharing GPS</div>
+  </div>
+
+  <span class="badge" id="netBadge">🌐 Network: Checking...</span>
+  <span class="badge" id="serverBadge">🔴 Server: Disconnected</span>
+
+  <button class="btn" id="btn" onclick="toggleTracking()">▶ Start Sharing</button>
+
+  <script>
+    const socket = io();
+    let watchId = null;
+    let isTracking = false;
+    let offlineBuffer = [];
+
+    socket.on('connect', () => {
+      document.getElementById('serverBadge').textContent = '🟢 Server: Connected';
+      document.getElementById('serverBadge').className = 'badge good';
+      flushBuffer();
+    });
+
+    socket.on('disconnect', () => {
+      document.getElementById('serverBadge').textContent = '🔴 Server: Disconnected';
+      document.getElementById('serverBadge').className = 'badge offline';
+    });
+
+    function toggleTracking() {
+      isTracking ? stopTracking() : startTracking();
+    }
+
+    function startTracking() {
+      if (!navigator.geolocation) {
+        alert('Geolocation not supported!');
+        return;
+      }
+      isTracking = true;
+      document.getElementById('btn').textContent = '⏹ Stop Sharing';
+      document.getElementById('btn').classList.add('stop');
+      document.getElementById('dot').classList.add('active');
+      document.getElementById('statusText').textContent = 'Sharing location...';
+
+      watchId = navigator.geolocation.watchPosition(
+        (pos) => {
+          const data = {
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude,
+            accuracy: pos.coords.accuracy,
+          };
+          sendOrBuffer(data);
+          document.getElementById('info').innerHTML =
+            `📍 Lat: ${data.lat.toFixed(6)}<br>
+             📍 Lng: ${data.lng.toFixed(6)}<br>
+             🎯 Accuracy: ${data.accuracy.toFixed(0)}m<br>
+             📦 Buffered: ${offlineBuffer.length} points`;
+        },
+        (err) => {
+          document.getElementById('info').textContent = '❌ Error: ' + err.message;
+        },
+        { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 }
+      );
+      checkNetwork();
+    }
+
+    function stopTracking() {
+      isTracking = false;
+      navigator.geolocation.clearWatch(watchId);
+      document.getElementById('btn').textContent = '▶ Start Sharing';
+      document.getElementById('btn').classList.remove('stop');
+      document.getElementById('dot').classList.remove('active');
+      document.getElementById('statusText').textContent = 'Stopped';
+    }
+
+    function sendOrBuffer(data) {
+      if (socket.connected) {
+        flushBuffer();
+        socket.emit('driver:location', data);
+      } else {
+        offlineBuffer.push(data);
+      }
+    }
+
+    function flushBuffer() {
+      while (offlineBuffer.length > 0) {
+        socket.emit('driver:location', offlineBuffer.shift());
+      }
+    }
+
+    function checkNetwork() {
+      const conn = navigator.connection || navigator.mozConnection;
+      const badge = document.getElementById('netBadge');
+      if (conn) {
+        const type = conn.effectiveType;
+        if (type === '4g') {
+          badge.textContent = '📶 Network: Good (4G)';
+          badge.className = 'badge good';
+        } else if (type === '3g') {
+          badge.textContent = '📶 Network: Medium (3G)';
+          badge.className = 'badge slow';
+        } else {
+          badge.textContent = '📶 Network: Slow (2G)';
+          badge.className = 'badge offline';
+        }
+      }
+      setTimeout(checkNetwork, 5000);
+    }
+  </script>
+</body>
+</html>
